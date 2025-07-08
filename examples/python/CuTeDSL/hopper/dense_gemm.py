@@ -26,6 +26,9 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import sys
+sys.path.insert(0, "/home/fangwen/miniforge3/lib/python3.12/site-packages/nvidia_cutlass_dsl/python_packages")
+
 import argparse
 from typing import Tuple, Type
 import math
@@ -382,14 +385,34 @@ class HopperWgmmaGemmKernel:
         self._setup_attributes()
 
         tiled_mma = sm90_utils.make_trivial_tiled_mma(
-            self.a_dtype,
-            self.b_dtype,
-            self.a_layout.sm90_mma_major_mode(),
-            self.b_layout.sm90_mma_major_mode(),
-            self.acc_dtype,
-            self.atom_layout_mnk,
-            tiler_mn=(64, self.tile_shape_mnk[1]),
+            self.a_dtype, # Float16
+            self.b_dtype, # Float16
+            self.a_layout.sm90_mma_major_mode(), # OperandMajorMode.K
+            self.b_layout.sm90_mma_major_mode(), # OperandMajorMode.K
+            self.acc_dtype, # Float32
+            self.atom_layout_mnk, # (2, 1, 1)
+            tiler_mn=(64, self.tile_shape_mnk[1]), # tile_shape_mnk = (128, 256, 64)
         )
+
+        # print(f"self.a_dtype: {self.a_dtype}")
+        # print(f"self.b_dtype: {self.b_dtype}")
+        # print(f"self.a_layout.sm90_mma_major_mode(): {self.a_layout.sm90_mma_major_mode()}")
+        # print(f"self.b_layout.sm90_mma_major_mode(): {self.b_layout.sm90_mma_major_mode()}")
+        # print(f"self.acc_dtype: {self.acc_dtype}")
+        # print(f"self.atom_layout_mnk: {self.atom_layout_mnk}")
+        # print(f"self.tile_shape_mnk: {self.tile_shape_mnk}")
+
+        print(f"Using tiled MMA: {tiled_mma}") 
+        #   Using tiled MMA: Tiled MMA
+        #   Thr Layout VMNK: (128,2,1,1):(1,128,0,0)                    (V stands for Vector lane?)
+        #   Permutation MNK: (_,_,_)
+
+        # MMA Atom
+        #   ThrID:           128:1                                      (128 threads per warp group)
+        #   Shape MNK:       (64,256,16)
+        #   TV Layout A:     (128,(64,16)):(0,(1,64))
+        #   TV Layout B:     (128,(256,16)):(0,(1,256))
+        #   TV Layout C:     ((4,8,4),(2,2,32)):((128,1,16),(64,8,512))
 
         tma_atom_a, tma_tensor_a = self._make_tma_atoms_and_tensors(
             a,
@@ -397,6 +420,15 @@ class HopperWgmmaGemmKernel:
             (self.tile_shape_mnk[0], self.tile_shape_mnk[2]),
             self.cluster_shape_mnk[1],
         )
+
+        # print(f"Using TMA atom A: {str(tma_atom_a)}")
+        # Using TMA atom A: Copy Atom
+        # ThrID:         1:0
+        # TV Layout Src: (1,8192):(0,1)
+        # TV Layout Dst: (1,8192):(0,1)
+        # Value type:    f16
+        # print(f"Using TMA tensor A: {tma_tensor_a}")
+        # Using TMA tensor A: tensor<(0,0,0) o (?,?,?):(1@1,1@0,1@2)>
 
         tma_atom_b, tma_tensor_b = self._make_tma_atoms_and_tensors(
             b,

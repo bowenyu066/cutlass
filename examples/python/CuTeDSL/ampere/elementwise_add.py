@@ -26,6 +26,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import sys
+sys.path.insert(0, "/home/fangwen/miniforge3/lib/python3.12/site-packages/nvidia_cutlass_dsl/python_packages")
 
 import argparse
 import torch
@@ -237,6 +239,8 @@ def elementwise_add(mA, mB, mC, copy_bits: cutlass.Constexpr = 128):
     print(f"[DSL INFO]   mB = {mB.type}")
 
     print(f"[DSL INFO] Tiling Parameters:")
+    print(f"[DSL INFO]   thr_layout = {thr_layout}")
+    print(f"[DSL INFO]   val_layout = {val_layout}")
     print(f"[DSL INFO]   tiler_mn = {tiler_mn} per thread block")
     print(f"[DSL INFO]   tv_layout = {tv_layout}")
 
