@@ -144,8 +144,8 @@ def elementwise_add_kernel(
     tv_layout: cute.Layout,
     tiler_mn: cute.Shape,
 ):
-    tidx, _, _ = cute.arch.thread_idx()
-    bidx, _, _ = cute.arch.block_idx()
+    tidx, _, _ = cute.arch.thread_idx() # thread id
+    bidx, _, _ = cute.arch.block_idx() # block id
 
     # slice for CTAs
     # logical id -> address
@@ -165,9 +165,17 @@ def elementwise_add_kernel(
     copy_atom_load = cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), gA.element_type)
     copy_atom_store = cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), gC.element_type)
 
+    # print(f"[DSL INFO]  copy_atom_load: {copy_atom_load}")
+    # print(f"[DSL INFO]  copy_atom_store: {copy_atom_store}")
+
     tiled_copy_A = cute.make_tiled_copy(copy_atom_load, tv_layout, tiler_mn)
     tiled_copy_B = cute.make_tiled_copy(copy_atom_load, tv_layout, tiler_mn)
     tiled_copy_C = cute.make_tiled_copy(copy_atom_store, tv_layout, tiler_mn)
+
+    # print(f"[DSL INFO] Tiled Copies:")
+    # print(f"[DSL INFO]   tiled_copy_A = {tiled_copy_A}")
+    # print(f"[DSL INFO]   tiled_copy_B = {tiled_copy_B}")
+    # print(f"[DSL INFO]   tiled_copy_C = {tiled_copy_C}")
 
     thr_copy_A = tiled_copy_A.get_slice(tidx)
     thr_copy_B = tiled_copy_B.get_slice(tidx)
@@ -176,6 +184,12 @@ def elementwise_add_kernel(
     thrA = thr_copy_A.partition_S(blkA)
     thrB = thr_copy_B.partition_S(blkB)
     thrC = thr_copy_C.partition_S(blkC)
+
+    if tidx == 1 and bidx == 0:
+        # cute.printf(f"thr_copy_A: {str(thr_copy_A)}")
+        cute.printf("thrA: {}", thrA)
+        cute.printf(blkA[0, 4], blkA[0, 5], blkA[0, 6], blkA[0, 7], blkA[1, 4], blkA[1, 5], blkA[1, 6], blkA[1, 7])
+
 
     # allocate fragments for gmem->rmem
     frgA = cute.make_fragment_like(thrA)
@@ -194,6 +208,16 @@ def elementwise_add_kernel(
     for i in cutlass.range_dynamic(0, cute.size(frgPred), 1):
         val = cute.elem_less(thrCrd[i], shape)
         frgPred[i] = val
+        if val != 1:
+            cute.printf(
+                "thrCrd[{}] = {}, shape = {}, frgPred[{}] = {}",
+                i, thrCrd[i], shape, i, frgPred[i]
+            )
+
+    # Why do we need a predicate mask?
+    # If the input tensor is not a multiple of the tile size, we need to guard
+    # the out-of-bounds reads and writes. The predicate mask is used to ensure
+    # that we only read/write valid elements in the fragment.
 
     # Print per thread predicate mask
     # if tidx == 0 and bidx == 0:
@@ -209,6 +233,10 @@ def elementwise_add_kernel(
 
     cute.copy(copy_atom_load, thrA, frgA, pred=frgPred)
     cute.copy(copy_atom_load, thrB, frgB, pred=frgPred)
+
+    frgA : cute.Tensor
+    frgB : cute.Tensor
+    frgC : cute.Tensor
 
     # if tidx == 0 and bidx == 0:
     #     cute.print_tensor(frgA)
@@ -394,3 +422,50 @@ if __name__ == "__main__":
         iterations=args.iterations,
     )
     print("\nPASS")
+
+
+"""
+The script output:
+
+Running Elementwise Add test with:
+Tensor dimensions: [1024, 1024]
+Input and Output Data type: Float32
+Input tensor shapes:
+a: torch.Size([1024, 1024]), dtype: torch.float32
+b: torch.Size([1024, 1024]), dtype: torch.float32
+c: torch.Size([1024, 1024]), dtype: torch.float32
+
+Compiling kernel with cute.compile ...
+[DSL INFO] Input Tensors:
+[DSL INFO]   mA = !cute.memref<f32, gmem, "(?,?):(?,1)">
+[DSL INFO]   mB = !cute.memref<f32, gmem, "(?,?):(?,1)">
+[DSL INFO] Tiling Parameters:
+[DSL INFO]   thr_layout = (4,32):(32,1)
+[DSL INFO]   val_layout = (4,4):(4,1)
+[DSL INFO]   tiler_mn = (16, 128) per thread block
+[DSL INFO]   tv_layout = ((32,4),(4,4)):((64,4),(16,1))
+[DSL INFO] Tiled Tensors:
+[DSL INFO]   gA = !cute.memref<f32, gmem, "((16,128),(?,?)):((?,1),(?{div=16},128))">
+[DSL INFO]   gB = !cute.memref<f32, gmem, "((16,128),(?,?)):((?,1),(?{div=16},128))">
+[DSL INFO]   gC = !cute.memref<f32, gmem, "((16,128),(?,?)):((?,1),(?{div=16},128))">
+[DSL INFO]   coord tensor = !cute.counting_tensor<"(0,0)", "((16,128),(?,?)):((1@0,1@1),(16@0,128@1))">
+[DSL INFO] Sliced Tensors per thread block:
+[DSL INFO]   blkA = !cute.memref<f32, gmem, "(16,128):(?,1)">
+[DSL INFO]   blkB = !cute.memref<f32, gmem, "(16,128):(?,1)">
+[DSL INFO]   blkC = !cute.memref<f32, gmem, "(16,128):(?,1)">
+[DSL INFO]   blkCrd = !cute.counting_tensor<"(?{div=16},?{div=128})", "(16,128):(1@0,1@1)">
+[DSL INFO] Sliced Tensors per thread:
+[DSL INFO]   thrA = !cute.memref<f32, gmem, "((1,(4,4)),1,1):((0,(1,?)),0,0)">
+[DSL INFO]   thrB = !cute.memref<f32, gmem, "((1,(4,4)),1,1):((0,(1,?)),0,0)">
+[DSL INFO]   thrC = !cute.memref<f32, gmem, "((1,(4,4)),1,1):((0,(1,?)),0,0)">
+[DSL INFO]   thrCrd = !cute.counting_tensor<"(?{div=4},?{div=4})", "((1,(4,4)),1,1):((0,(1@1,1@0)),0,0)">
+Compilation time: 0.5498 seconds
+Executing vector add kernel...
+Verifying results...
+thrA: raw_ptr(0x00007f0976000010: f32, gmem, align<4>) o ((1,(4,4)),1,1):((0,(1,1024)),0,0) = 
+  ( 0.292379, -1.471555, 0.250305, 0.593725, 0.806980, -0.550821, 2.446600, -0.540603, -0.370273, 0.914554, -2.495319, 0.722438, -0.365738, 0.019777, 0.826085, 1.250348 )
+0.292379, -1.471555, 0.250305, 0.593725, 0.806980, -0.550821, 2.446600, -0.540603
+Results verified successfully!
+
+PASS
+"""
